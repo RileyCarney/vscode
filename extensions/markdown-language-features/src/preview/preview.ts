@@ -15,6 +15,7 @@ import { areUrisEqual, getMarkdownLocalResourceRoots, WebviewResourceProvider } 
 import { urlToUri } from '../util/url';
 import { ImageInfo, MdDocumentRenderer } from './documentRenderer';
 import { MarkdownPreviewConfigurationManager } from './previewConfig';
+import { dynamicPreviewsMatch } from './previewMatching';
 import { scrollEditorToLine, StartingScrollFragment, StartingScrollLine, StartingScrollLocation } from './scrolling';
 import { getVisibleLine, LastScrollLocation, TopmostLineMonitor } from './topmostLineMonitor';
 import type { DiffScrollSyncData, FromWebviewMessage, MarkdownPreviewLineChanges, ToWebviewMessage } from '../../types/previewMessaging';
@@ -536,7 +537,8 @@ export interface IManagedMarkdownPreview {
 	matchesResource(
 		otherResource: vscode.Uri,
 		otherPosition: vscode.ViewColumn | undefined,
-		otherLocked: boolean
+		otherLocked: boolean,
+		otherSourceBound: boolean
 	): boolean;
 }
 
@@ -641,7 +643,8 @@ export class StaticMarkdownPreview extends Disposable implements IManagedMarkdow
 	public matchesResource(
 		_otherResource: vscode.Uri,
 		_otherPosition: vscode.ViewColumn | undefined,
-		_otherLocked: boolean
+		_otherLocked: boolean,
+		_otherSourceBound: boolean
 	): boolean {
 		return false;
 	}
@@ -681,6 +684,11 @@ interface DynamicPreviewInput {
 	readonly resource: vscode.Uri;
 	readonly resourceColumn: vscode.ViewColumn;
 	readonly locked: boolean;
+	/**
+	 * Is the preview bound to its source document? Unlike unlocked previews, source bound previews
+	 * do not follow the active editor and are not shared with previews of other documents.
+	 */
+	readonly sourceBound?: boolean;
 	readonly line?: number;
 }
 
@@ -690,6 +698,7 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 
 	readonly #resourceColumn: vscode.ViewColumn;
 	#locked: boolean;
+	#sourceBound: boolean;
 
 	readonly #webviewPanel: vscode.WebviewPanel;
 	#preview: MarkdownPreview;
@@ -761,6 +770,7 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 
 		this.#resourceColumn = input.resourceColumn;
 		this.#locked = input.locked;
+		this.#sourceBound = !!input.sourceBound;
 
 		this.#preview = this.#createPreview(input.resource, typeof input.line === 'number' ? new StartingScrollLine(input.line) : undefined);
 
@@ -794,7 +804,7 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 				return;
 			}
 
-			if (isMarkdownFile(editor.document) && !this.#locked && !this.#preview.isPreviewOf(editor.document.uri)) {
+			if (isMarkdownFile(editor.document) && !this.#locked && !this.#sourceBound && !this.#preview.isPreviewOf(editor.document.uri)) {
 				const line = getVisibleLine(editor);
 				this.update(editor.document.uri, line ? new StartingScrollLine(line) : undefined);
 			}
@@ -873,6 +883,10 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 
 	public toggleLock() {
 		this.#locked = !this.#locked;
+		if (!this.#locked) {
+			// Explicitly unlocking means the preview should start following the active editor
+			this.#sourceBound = false;
+		}
 		this.#webviewPanel.title = DynamicMarkdownPreview.#getPreviewTitle(this.#preview.resource, this.#locked);
 	}
 
@@ -890,21 +904,17 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 	public matchesResource(
 		otherResource: vscode.Uri,
 		otherPosition: vscode.ViewColumn | undefined,
-		otherLocked: boolean
+		otherLocked: boolean,
+		otherSourceBound: boolean
 	): boolean {
-		if (this.position !== otherPosition) {
-			return false;
-		}
-
-		if (this.#locked) {
-			return otherLocked && this.#preview.isPreviewOf(otherResource);
-		} else {
-			return !otherLocked;
-		}
+		return dynamicPreviewsMatch(
+			{ viewColumn: this.position, locked: this.#locked, sourceBound: this.#sourceBound },
+			{ viewColumn: otherPosition, locked: otherLocked, sourceBound: otherSourceBound },
+			() => this.#preview.isPreviewOf(otherResource));
 	}
 
 	public matches(otherPreview: DynamicMarkdownPreview): boolean {
-		return this.matchesResource(otherPreview.#preview.resource, otherPreview.position, otherPreview.#locked);
+		return this.matchesResource(otherPreview.#preview.resource, otherPreview.position, otherPreview.#locked, otherPreview.#sourceBound);
 	}
 
 	#createPreview(resource: vscode.Uri, startingScroll?: StartingScrollLocation): MarkdownPreview {
@@ -914,6 +924,7 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 				return {
 					resourceColumn: this.resourceColumn,
 					locked: this.#locked,
+					sourceBound: this.#sourceBound,
 				};
 			},
 			openPreviewLinkToMarkdownFile: (link: vscode.Uri, fragment?: string) => {

@@ -24,6 +24,10 @@ export interface DynamicPreviewSettings {
 	readonly resourceColumn: vscode.ViewColumn;
 	readonly previewColumn: vscode.ViewColumn;
 	readonly locked: boolean;
+	/**
+	 * Bind the preview to `resource` instead of having it follow the active editor.
+	 */
+	readonly sourceBound?: boolean;
 }
 
 class PreviewStore<T extends IManagedMarkdownPreview> extends Disposable {
@@ -45,7 +49,7 @@ class PreviewStore<T extends IManagedMarkdownPreview> extends Disposable {
 	public get(resource: vscode.Uri, previewSettings: DynamicPreviewSettings): T | undefined {
 		const previewColumn = this.#resolvePreviewColumn(previewSettings);
 		for (const preview of this.#previews) {
-			if (preview.matchesResource(resource, previewColumn, previewSettings.locked)) {
+			if (preview.matchesResource(resource, previewColumn, previewSettings.locked, !!previewSettings.sourceBound)) {
 				return preview;
 			}
 		}
@@ -200,11 +204,12 @@ export class MarkdownPreviewManager extends Disposable implements vscode.Webview
 		try {
 			const resource = vscode.Uri.parse(state.resource);
 			const locked = state.locked;
+			const sourceBound = !!state.sourceBound;
 			const line = state.line;
 			const resourceColumn = state.resourceColumn;
 
 			const preview = DynamicMarkdownPreview.revive(
-				{ resource, locked, line, resourceColumn },
+				{ resource, locked, sourceBound, line, resourceColumn },
 				webview,
 				this.#contentProvider,
 				this.#previewConfigurations,
@@ -337,6 +342,7 @@ export class MarkdownPreviewManager extends Disposable implements vscode.Webview
 				resource,
 				resourceColumn: previewSettings.resourceColumn,
 				locked: previewSettings.locked,
+				sourceBound: previewSettings.sourceBound,
 				line: scrollLocation?.type === 'line' ? scrollLocation.line : undefined,
 			},
 			previewSettings.previewColumn,
