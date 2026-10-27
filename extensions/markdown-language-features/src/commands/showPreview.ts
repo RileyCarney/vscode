@@ -41,7 +41,10 @@ async function showPreview(
 	webviewManager.openDynamicPreview(resource, {
 		resourceColumn: resourceColumn,
 		previewColumn: previewSettings.sideBySide ? vscode.ViewColumn.Beside : resourceColumn,
-		locked: !!previewSettings.locked
+		locked: !!previewSettings.locked,
+		// Previews opened in place belong to their document, so each document gets its own preview.
+		// Previews opened to the side follow the active editor instead.
+		sourceBound: !previewSettings.sideBySide,
 	});
 
 	telemetryReporter.sendTelemetryEvent('openPreview', {
